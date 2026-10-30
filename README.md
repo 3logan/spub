@@ -15,7 +15,7 @@ Version 0.1.0 provides:
 
 **Blockchain publication and retrieval are not yet implemented in this package.**
 
-The current library performs its operations locally and does not transmit notes or encryption keys to SPUB.net.
+The current library performs its operations locally and does not transmit notes or encryption keys.
 
 ## Example
 
@@ -87,4 +87,4 @@ The current encryption implementation should be considered experimental.
 
 SPUB is in early development.
 
-The intended protocol is open, additional services at SPUB.net in devlopment.
+The intended protocol is open, additional services at SPUB.net in development.
