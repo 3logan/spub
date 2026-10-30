@@ -3,6 +3,8 @@ name = "spub"
 version = "0.1.0"
 description = "Open-source tools for encrypting, publishing, and recovering small permanent records on Stellar."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "SPUB"}
 ]
