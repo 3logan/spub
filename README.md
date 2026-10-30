@@ -2,9 +2,7 @@
 
 **Open-source Python tools for encrypted, verifiable records on Stellar.**
 
-SPUB is an experimental, open-source Python project exploring how small encrypted records can be preserved, retrieved, and independently verified using the Stellar blockchain.
-
-The long-term goal is to make publishing a small historical note, research observation, or AI agent checkpoint straightforward without requiring users to understand blockchain transactions.
+SPUB is an experimental, open-source Python project exploring how encrypted records can be preserved, retrieved, and independently verified using the Stellar blockchain.
 
 ## Current functionality
 
@@ -60,7 +58,7 @@ This format is experimental and may change before a stable protocol release.
 
 ## Development
 
-Clone the repository and install the development environment using [uv](https://docs.astral.sh/uv/):
+Repository can be cloned and the development environment installed using [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync
@@ -82,12 +80,11 @@ uv run python examples/basic_encryption.py
 
 SPUB uses the Python `cryptography` library's AES-256-GCM implementation.
 
-This project has not undergone an independent security audit. Its current encryption implementation should be considered experimental.
+The current encryption implementation should be considered experimental.
 
-SPUB does not recover lost encryption keys, and successful encryption does not establish the legality, authenticity, or provenance of the original material.
 
 ## Project status
 
-SPUB is in early development. Planned areas of exploration include Stellar publication, transaction receipts, independent recovery, and protocol interoperability.
+SPUB is in early development.
 
-The intended protocol is open, so independently implemented clients should eventually be able to create and recover compatible publications without depending on SPUB.net.
+The intended protocol is open, additional services at SPUB.net in devlopment.
