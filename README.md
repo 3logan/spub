@@ -1,6 +1,6 @@
 # SPUB
 
-**Simple tools for preparing encrypted notes for permanent publication.**
+**Open-source Python tools for encrypted, verifiable records on Stellar.**
 
 SPUB is an experimental, open-source Python project exploring how small encrypted records can be preserved, retrieved, and independently verified using the Stellar blockchain.
 
