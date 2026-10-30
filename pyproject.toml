@@ -1,0 +1,22 @@
+[project]
+name = "spub"
+version = "0.1.0"
+description = "Open-source tools for encrypting, publishing, and recovering small permanent records on Stellar."
+readme = "README.md"
+authors = [
+    { name = "SPUB"}
+]
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=50.0.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "spyder-kernels>=3.1.6",
+]
