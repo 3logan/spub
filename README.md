@@ -35,7 +35,7 @@ print(original)
 
 `package` contains the encrypted binary data.
 
-`key` is the secret 32-byte AES-256 key required to decrypt it. 
+`key` is the secret 32-byte AES-256 key required to decrypt it. It is separate from the package.
 
 **Keep the key private and preserve it securely. Losing the key means losing access to the original note.**
 
