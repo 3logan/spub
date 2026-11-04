@@ -1,0 +1,19 @@
+[package]
+name = "spub_soroban_probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = "=28.0.0"
+
+[profile.release]
+opt-level = "z"
+strip = "symbols"
+codegen-units = 1
+lto = true
+panic = "abort"
+overflow-checks = true

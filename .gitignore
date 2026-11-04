@@ -14,3 +14,10 @@ scratch/
 
 # Pytest artifacts
 .pytest_cache/
+
+# Rust / Soroban build artifacts
+target/
+*.wasm
+
+# Local Stellar CLI configuration
+.stellar/
