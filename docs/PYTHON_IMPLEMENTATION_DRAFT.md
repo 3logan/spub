@@ -1,182 +1,151 @@
-# SPUB Python SDK & CLI — Implementation Plan (Draft)
+# SPUB Python SDK & CLI — Simplified Implementation Plan (Draft 0.3)
 
-**Date:** 2026-11-07  
-**Purpose:** A focused build plan for someone implementing SPUB incrementally. **Start with archive verification, not the final contract.**  
-**Status:** Plan, not completed code. APIs and filenames below are proposed.
+**Updated:** 2026-11-07  
+**Status:** Proposed implementation, not a released API.  
+**Build priority:** Validate historical archive recovery first; then complete prepare → publish → retrieve → decrypt.
 
-## 1. What counts as a successful first release?
+## 1. Core model
 
-A user can **prepare** a portable encrypted `.spub` file, **estimate** the fee/timeout, **publish** it through a fixed Soroban contract on Testnet, receive a **private receipt and valid `spub1:t:` ID**, **retrieve** exactly those bytes from a historical archive and **decrypt** them. The same code supports Mainnet via network configuration, with an explicit cost confirmation. Normal archive checks establish transaction **success**, **contract identity** and a clearly stated **archive-verification level**.
+| Term | Definition |
+|---|---|
+| **Document** | Original content before encryption |
+| **Package** | One immutable encrypted `.spub` byte sequence, identified by SHA-256 |
+| **Package record** | Local folder containing that package and its evolving receipt |
+| **Publication** | One *successful* Stellar transaction containing the package, with its own publication ID |
 
-Avoid making the initial version solve global indexing, chunking, hosted key backup, payments, or a public web UI.
+**One package can have zero, one, or many publications and failed transaction attempts.** Re-encrypting the same document creates a different package because each preparation uses a fresh document key and nonce. A separate master encryption key (MEK) can be chosen for each intended audience.
 
-## 2. Proposed repository layout
+There is **one local receipt per package**, not one per transaction, and no mandatory database or ZIP bundle.
+
+## 2. Files and identifiers
+
+Use `platformdirs` for the local application data directory. For example:
 
 ```text
-spub/
-  README.md
-  pyproject.toml
-  .gitignore
-  docs/
-    SPUB1_PROTOCOL_DRAFT.md
-    PYTHON_IMPLEMENTATION_DRAFT.md
-  src/spub/
-    __init__.py
-    __main__.py
-    config.py          # network, contract, local paths, safe defaults
-    crypto.py          # AES-256-GCM + RFC 3394 AES-256-KW
-    package.py         # parse/build/check binary SPUB1 envelope
-    keys.py            # explicit KEK initialization, lookup, backup/export
-    stellar.py         # TransactionBuilder + SorobanServer operations
-    archive.py         # retrieve and parse checkpoint XDR
-    verification.py    # success/contract/commitment/trust-anchor validation
-    receipts.py        # private one-receipt JSON format
-    cli.py             # installable human + agent interface
-  contracts/spub1/     # minimal Rust/Soroban Wasm source
-  tests/
-    test_package.py
-    test_crypto.py
-    test_archive.py
-    test_transaction.py
-    fixtures/          # canonical test-only vectors and historical samples
+<spub-data>/
+  packages/
+    <64-character-package-sha256>/
+      package.spub       # original immutable encrypted bytes
+      receipt.json       # evolving local history
+    <another-package-sha256>/
+      package.spub
+      receipt.json
+  publications.jsonl     # rebuildable index of successful publications
 ```
 
-Keep existing `soroban_probe` and working archive reader code as **reference experiments** until their behavior is covered by tests; don't rewrite them all at once.
+- The folder name is SHA-256 of the **complete `package.spub` bytes**. Verify before trusting a file.
+- Importing or retrieving identical encrypted bytes reuses the existing package record. Never silently replace different bytes or lose receipt history.
+- Archive retrieval normally **verifies the existing `package.spub`**; it does not create `retrieved.spub`. If the local package is missing, restore the original bytes after validation.
+- Source files remain where they are. Private filenames, paths, MEK aliases and local timestamps never go on-chain.
 
-## 3. Python API — proposed behavior
+## 3. One evolving `receipt.json`
 
-```python
-package = spub.prepare("checkpoint.md", save=True)
-quote = spub.estimate(package, network="testnet")
-receipt = spub.publish(package, network="testnet", timeout=300)
-
-# Convenience: auto-prepare raw source, preserving the same crypto logic
-receipt = spub.publish("checkpoint.md", network="testnet")
-
-# For a pre-existing .spub package, do not re-encrypt it
-receipt = spub.publish("checkpoint.md.spub", network="testnet")
-
-raw_package = spub.retrieve(publication_id)
-plaintext = spub.decrypt(raw_package, master_key=...)
-```
-
-- `prepare`: no network or Stellar signing secret required; may return package object or write `.spub`; capture encryption timestamp **locally**, not inside public bytes.
-- `estimate`: uses **the same invocation-building routine as `publish`** and network simulation. Show package bytes, network/contract, estimated resource fee, maximum inclusion bid, maximum total fee, explicit restoration estimate, validity timeout and plausible confirmation range. Estimate isn't a guarantee.
-- `publish`: choose Testnet by default during development; **prompt/confirm for Mainnet**. Obtain a signer locally (e.g. secure interactive prompt or configured external signer); sign only after the fee cap is accepted. Submit, wait/poll, and avoid blind retries if outcome is uncertain.
-- `retrieve`: no Stellar wallet or AES key; return exact recovered `.spub` bytes and a **verification report**.
-- `decrypt`: key unwrap and GCM authenticate; never return plaintext if validation fails.
-
-Existing `.spub` files may come from third parties. The official client can attempt decryption before publishing when the KEK/DEK is available; if a publisher deliberately submits without a key, require a clear `allow_unverified` option. Contract admission remains only structural.
-
-## 4. Core dependencies and implementation policy
-
-- Use `cryptography` for `AESGCM`, `aes_key_wrap` and `aes_key_unwrap`; **do not implement AES manually**.
-- Use `stellar-sdk` (Python) and its `TransactionBuilder` plus `SorobanServer` / current higher-level equivalent for simulation, preparation, signing and transaction-status results.
-- Use the Stellar RPC client for Soroban; don't use Horizon `Server` with a made-up URL for contract invocation.
-- Use an XDR parser provided by the SDK where possible; do not implement an independent Stellar consensus engine just for SPUB.
-- Use `platformdirs` for local config/receipt locations. `keyring` should initially be an **optional key-custody backend**, not a required dependency of the SPUB wire format.
-- Use a `src/` Python package with a `pyproject.toml`, installable CLI and automated `pytest` tests. Pin tested versions before release; current SDK APIs can evolve.
-
-## 5. The next objective: stronger archive verification
-
-**Do this before writing the final Soroban contract.** It uses the existing working archive-reader prototype and produces reusable tests for both networks.
-
-### Phase A — read-only, low-cost local/archive tests
-
-**A1. Recovery baseline.** Re-run the previously known 80 KiB Testnet `soroban_probe` locator, when Testnet history still contains it. Verify bytes, size, SHA-256 and exact hash/ledger. If Testnet has reset, create a new small Testnet fixture; do not silently switch to a different transaction.
-
-**A2. Transaction-result validation.** From the matching archive **results** XDR, prove that the candidate invocation's transaction result is `SUCCESS`. Confirm the alignment/order of transactions and results; include an intentionally failed Soroban transaction as a negative fixture (or a published archive fixture with documented known failure).
-
-**A3. Invocation inspection.** Check `InvokeHostFunction`/contract-call target, function name and *full* `Bytes` argument. Reject a correct-looking `.spub` package that was not published through the expected contract. For earlier probe fixtures, check the known **probe** contract/function, not SPUB1's future canonical contract.
-
-**A4. Archive internal consistency.** Verify XDR parsing, ledger-header hashes, transaction-set commitments, transaction-result-set commitments, and chain links within and across checkpoints. Prefer testing or invoking **Rust Stellar Archivist** with `scan --verify` rather than re-implementing all of these checks. Precisely state what the tool checked.
-
-**A5. Archive source independence.** Fetch the same Mainnet (read-only) transaction checkpoint from two distinct compatible archives when available. Compare the exact ledger/transaction bytes and verification findings. Agreement is useful evidence, **not by itself consensus proof**.
-
-**A6. Trust anchoring.** Verify a checkpoint/ledger hash against a **separately trusted hash**. Explore the official `stellar-core verify-checkpoints` / trusted checkpoint reference workflow. Report `located`, `archive_verified`, or `consensus_anchored` separately; fail closed on contradictions.
-
-**A7. Edge and corruption tests.** Wrong network passphrase, bad ledger, wrong tx hash, truncated gzip/XDR, tampered archive bytes, checkpoint boundary (`63/64/65`-style), unexpected fee-bump envelope, unknown contract/function, wrong/missing results, and stale/missing archive checkpoint.
-
-**A8. Verification report.** Return a small machine-readable record such as:
+Create the receipt at preparation/import. Update it as transactions are built, submitted, confirmed, and later retrieved or verified. Its core structure is:
 
 ```json
 {
-  "publication_id": "spub1:t:...",
-  "network": "testnet",
-  "ledger": 12345,
-  "transaction_success": true,
-  "contract_verified": true,
-  "payload_sha256": "...",
-  "archive_verification": "archive_verified",
-  "trusted_checkpoint": null,
-  "archive_source": "configured-history-archive",
-  "notes": []
+  "receipt_version": 1,
+  "package_sha256": "<sha256>",
+  "source": {"filename": "research.md"},
+  "encryption": {"mek_id": "<random-uuid>", "mek_alias": "friend_a"},
+  "transactions": [
+    {
+      "network": "testnet", "hash": "<tx-A>",
+      "status": "FAILED", "ledger": 12345,
+      "fee_paid_stroops": 180000
+    },
+    {
+      "network": "testnet", "hash": "<tx-B>",
+      "status": "SUCCESS", "ledger": 12347,
+      "publication_id": "spub1:t:12347:<tx-B>",
+      "fee_paid_stroops": 175000,
+      "verification_history": []
+    }
+  ]
 }
 ```
 
-This JSON is **illustrative**, not a final public schema. Avoid claiming `contract_verified` on the old probe as if it were the new SPUB1 contract.
+*Illustrative only; hashes/IDs and numerical values are placeholders.* The actual schema also records relevant UTC dates, fee quotes and caps, publisher/contract addresses, expiration and failure diagnostics where known. Unknown private metadata remains absent or null.
 
-### Specific acceptance criteria for archive milestone
+Rules:
 
-- A matching historical transaction is recovered and recomputed to the expected network-bound hash.
-- Result-file verification distinguishes successful inclusion from on-chain failure.
-- A known valid example yields exactly the original argument bytes, while each corruption/negative fixture is rejected with a clear error.
-- Reported verification level never exceeds work actually performed.
-- Run the same archive verification routines for Testnet and Mainnet using **only configuration changes**.
+1. **One attempt per `(network, transaction_hash)`**, updated in place. The transaction hash can be computed **after Soroban transaction preparation and before submission**; persist the attempt before broadcasting. Rebuilding a transaction gives it a new hash.
+2. `PENDING` is not success; timeout is **not** proof of failure. Reconcile uncertain attempts before resubmitting. Include confirmed failed transactions and their actual fees.
+3. Allow **multiple successful publications** in the same `transactions` array. Keep their distinct publication IDs and **verification histories per transaction**; no single top-level publication ID.
+4. Save receipts atomically, with concurrency protection. Preflight errors with no constructed transaction are optional local diagnostics, not blockchain attempts.
+5. Never store MEKs, document keys, or Stellar signing secrets in receipts. Receipts are private records, **not independent cryptographic proof**.
 
-## 6. Focused Mainnet test ladder — no need to rush a paid publication
+## 4. Derived `publications.jsonl`
 
-**M0 — free, read-only:** choose a known, already-finalized **ordinary Mainnet transaction** with a documented successful Soroban invocation; verify archive checkpoint, network-specific transaction hash, result success and ledger commitment. Since it isn't SPUB1, don't claim canonical-SPUB1 conformance.
+One JSONL line per **confirmed successful publication**, with `publication_id`, `package_sha256`, network, ledger, transaction hash, and confirmed time. Multiple entries may point to one package record.
 
-**M1 — free, read-only:** retrieve the same checkpoint from two independent archives and compare, then test a separately trusted checkpoint hash. Archive availability and API/RPC provider charges may still apply.
+- **Normal path:** update `receipt.json` first, then append the success to the index, deduplicating by `(network, transaction_hash)`.
+- **Repair path:** `spub publications rebuild` scans `packages/*/receipt.json`, collects successes, and atomically regenerates the index.
+- The index is a convenience, not the source of truth. No scheduled scanner, SQL database, or second failure-receipt directory is necessary.
 
-**M2 — controlled paid test, only after deploying and validating SPUB1 contract:** publish a **small, non-sensitive** file (for example, several hundred bytes), using a new or otherwise carefully funded Mainnet account. Simulate the exact transaction first, review the fee maximum and 300-second validity, authorize once, capture receipt, then recover it **from archive history**. A checkpoint may not yet be uploaded immediately after confirmation; record any wait before archive visibility as a separate metric.
+## 5. Multiple master keys, unchanged `.spub` format
 
-**M3 — edge case, optional:** submit a structurally invalid small package on Testnet, not Mainnet, to test expected contract rejection and paid-failure behavior.
+Allow any number of MEKs: `personal`, `friend_a`, `friend_b`, etc. Each 32-byte MEK gets a random stable **`mek_id`** plus an optional renameable alias. Keep that identification **locally in `receipt.json`**, never in the public package.
 
-Never put a production Stellar signing secret or a real master key in tests, logs, public fixtures, or GitHub.
+Each `prepare()` generates a new 32-byte document-encryption key (DEK), wraps it with **AES-256-KW (RFC 3394)** and encrypts the plaintext with **AES-256-GCM**. Continue using the proposed **73-byte header**, `SPUB\x01 | wrapped_dek[40] | nonce[12] | tag[16] | ciphertext`, strictly **under 25,600 bytes total**. The protocol draft specifies the candidate offsets and AAD; test and freeze them before release.
 
-## 7. Build phases after archive verification
+Provide explicit `keys create|list|export|import`, optionally backed by OS `keyring`. **Never silently generate a replacement for a missing MEK.** If a retrieved package has no local receipt/MEK association, try a user-selected MEK or available local keys; successful decryption can identify a usable key. Sharing a MEK opens its collection; sharing only a document DEK opens that document.
 
-| Phase | Deliverable | Done when |
-|---|---|---|
-| 1 | Archive verification hardening | A1–A8 pass, including clear trust levels and Mainnet read-only checks |
-| 2 | Exact `.spub` codec/crypto | AES-KW/GCM round-trip, fixed vector, tamper failures, package size bounds |
-| 3 | Stateless Soroban contract | Valid package accepted; bad prefix/length rejected; publisher auth works; no storage writes |
-| 4 | Publish + estimate | Same transaction construction; visible resource/inclusion/restore quote; no silent fee increase |
-| 5 | Private receipt + key setup | One final receipt, known/unknown timestamps handled, no secret material in JSON |
-| 6 | End-to-end Testnet | One-step prepare/publish/ID/retrieve/decrypt and interrupted-status tests |
-| 7 | Controlled Mainnet | M2 published and recovered; costs and limits recorded; docs updated |
+## 6. Public Python API and CLI
 
-## 8. Fee and transaction handling — developer checklist
+```python
+record = spub.prepare("research.md", mek="friend_a")
+quote = spub.estimate(record, network="testnet")
+receipt = spub.publish(record, network="testnet", timeout=300)
 
-- Separate Stellar network configuration (passphrase, RPC URL, archive URLs, canonical contract, ID code); **do not** duplicate publisher functions for Testnet versus Mainnet.
-- Source account transaction signing happens locally. Don't send `S...` keys to the contract. `spub.prepare()` does not need signing credentials.
-- Simulation yields a resource fee estimate and runtime footprints; fees may change between estimate and inclusion. The final prepared transaction must be checked against a user-authorized total fee ceiling.
-- Make restoration *opt in when it adds unexpected charges*. If the publisher declines, stop without submitting. Contract instance/Wasm TTL and transaction timeout are unrelated.
-- The validity timeout defaults to 300 seconds **as a client preference**, not as a property of the binary package.
-- Preserve transaction hash and signed-XDR correlation in **minimal private recovery state** until status is certain. Distinguish failed, expired, successful and unresolved. Never blindly rebroadcast a new transaction on an RPC timeout.
-- Capture actual charged fees/any refunds from finalized results rather than showing the simulated amount as actual.
+recovered = spub.retrieve(publication_id)   # exact .spub bytes + verification
+plain = spub.decrypt(recovered.package, mek="friend_a")
+```
 
-## 9. Master-key management and privacy — still draft
+`prepare` can also **import** an existing `.spub` without re-encrypting. `publish` accepts an existing record or package ID; a raw-file convenience form can call `prepare` first. `retrieve` may save or reconcile a package record and update the matching receipt. Give AI agents structured Python return values, not just text printed by the CLI.
 
-One 32-byte publisher-owned master key (KEK) may reside in the OS credential store through `keyring`; SPUB should also support *explicit* import, backup/export and recovery. **Never silently generate a new master key when an expected key is missing.** The private local receipt may contain source filename/path, encryption time (if known), package mtime, original modified time, date submitted, ledger confirmation time, fee quote and actual charge, but **never the KEK or DEK**.
+Initial CLI: `spub keys ...`, `spub prepare`, `spub estimate`, `spub publish`, `spub retrieve`, `spub packages list|show`, and `spub publications list|rebuild`.
 
-Sharing an individual document requires the document's DEK and publication ID; sharing a master key potentially opens all packages wrapped by that master key. For the planned public "SPUB specification published using SPUB" example, share **only that document DEK** in GitHub.
+## 7. Minimal module layout
 
-## 10. Questions not worth holding up the first test
+```text
+src/spub/
+  __init__.py, __main__.py
+  config.py          # networks, contract IDs, local paths
+  crypto.py          # AES-GCM and AES-KW
+  package.py         # envelope and content-addressed package records
+  keys.py            # multiple MEKs, safe backup/lookup
+  stellar.py         # build/simulate/sign/submit/check transaction
+  archive.py         # historical retrieval and verification report
+  receipts.py        # one evolving JSON receipt per package
+  publications.py    # append/rebuild success index
+  cli.py
+contracts/spub1/     # minimal stateless Soroban contract
+ tests/               # interoperable vectors, XDR fixtures and integration tests
+```
 
-- Exact config/receipt directories (per publishing collection versus centralized) can be set after archive verification.
-- Whether OS credential `keyring` is a default or optional backend can be decided after the crypto layer works.
-- Event topics and error-code style can be pinned down when writing the minimal contract.
-- Automated quarterly canonical contract TTL renewal is an operations script, not a blocker for archive verification.
+Use `cryptography`, `stellar-sdk`, `platformdirs`, `pytest`, and optional `keyring`. Split archive verification into another module only if needed. Keep the working `soroban_probe` and archive reader as reference tests, not production dependencies.
 
-## 11. Documentation and primary references
+## 8. Build order
 
-- Stellar Python SDK RPC and transaction preparation: https://stellar-sdk.readthedocs.io/en/latest/api.html
-- Archivist archive verification: https://github.com/stellar/rs-stellar-archivist
-- Stellar Core checkpoint-hash trust: https://github.com/stellar/stellar-core/blob/master/docs/quick-reference.md
-- Protocol 23 Soroban state restoration: https://stellar.org/blog/developers/announcing-protocol-23
-- Python `cryptography` AES-GCM and AES-KW: https://cryptography.io/en/stable/hazmat/primitives/
+| Phase | Deliverable and test |
+|---|---|
+| **1. Archive verification first** | Extend existing reader to validate network-bound transaction hash, **results XDR success**, correct contract/function/full argument, archive commitments/chain links and separately trusted checkpoints where supported. Reject corrupted fixtures and report actual verification level. |
+| **2. Local package layer** | Implement SPUB1 codec/crypto, multiple MEKs, hash-named records, evolving receipts and rebuildable index. Round-trip vectors pass; tampered ciphertext fails; re-importing identical bytes deduplicates. |
+| **3. Publish on Testnet** | Implement minimal authorized contract and fee simulation. Save hash before submission; record failures, unknowns and multiple successes; index only successes. |
+| **4. Retrieve and reconcile** | Recover exact package bytes from archive. Verify transaction success/contract/bytes; update per-publication verification history or reconstruct a record on a new computer. |
+| **5. Controlled Mainnet validation** | Run read-only archive tests first; then one small explicitly authorized paid publication with verified fees and archival recovery. |
 
-**Next practical action:** Take the existing archive-reader script, put one historical fixture under `tests/fixtures/`, and write **A2 (success-results XDR)** and **A3 (contract-invocation check)** before touching Mainnet signing code. That is the shortest route to a stronger, testable recovery claim.
+Preserve meaningful archive levels: **`located`**, **`archive_verified`**, **`consensus_anchored`**. A parsed XDR or local hash match does not by itself establish consensus anchoring.
+
+## 9. Safety and scope
+
+- `estimate()` and `publish()` must use the same transaction-building logic; disclose fee bids, Soroban resource/restoration costs and maximum authorization before signing. Do not silently increase approved fees.
+- Require explicit approval for Mainnet. Never treat RPC timeout as a failed chain transaction or blindly publish twice. On-chain failure can still incur fees.
+- The contract checks publisher authorization, magic/version/length and emits minimal event metadata. The **entire `.spub` payload is an invocation argument**, not a contract-storage entry. Network contract TTL and transaction timeout are separate concerns.
+- Receipts/indexes are **rebuildable local conveniences**: independent archive recovery and decryption must remain possible without them.
+- **Defer:** ZIP bundles, SQL/global indexes, background schedulers, hosted services, chunked files, payments, sophisticated search, mandatory keyring, fee-bumps and contract TTL automation.
+
+**Next concrete task:** Add transaction-result checking and contract-invocation checks to the existing archive reader. Then test hash-named package records and evolving receipts before wiring up publishing.
+
+**Documentation follow-up:** The older SPUB1 protocol draft still discusses one MEK and a finished receipt per transaction. Update those *implementation notes* separately; the proposed **73-byte on-chain format does not change**.
