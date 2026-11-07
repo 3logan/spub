@@ -1,90 +1,79 @@
-# SPUB
+# SPUB — durable, verifiable short-form publishing on Stellar
 
-**Open-source Python tools for encrypted, verifiable records on Stellar.**
+**Status: experimental / pre-release.** SPUB1 is being designed and tested. **There is no published canonical Mainnet SPUB1 contract in this repository yet.** Do not use this project for irreplaceable data or assume archival availability or perpetual secrecy.
 
-SPUB is an experimental, open-source Python project exploring how encrypted records can be preserved, retrieved, and independently verified using the Stellar blockchain.
+SPUB aims to make it easy to publish a **short encrypted record** on the Stellar blockchain, receive a public locator, and later recover the original encrypted bytes **without needing spub.net or a proprietary database**.
 
-## Current functionality
+A SPUB publication is meant to be *small, durable, independently recoverable and verifiable*. SPUB is **not** primarily a secure-messaging product or a managed secrets vault.
 
-Version 0.1.0 provides:
+## The idea in one minute
 
-- Local AES-256-GCM encryption of UTF-8 text.
-- Local decryption and authenticated recovery.
-- A compact, versioned binary package format.
-- Automatic generation of a random encryption key and nonce.
+1. Prepare an encrypted `.spub` package locally.
+2. Preview Stellar network fees and the transaction validity timeout.
+3. Authorize **one** Soroban contract invocation containing the complete package.
+4. Receive a publication ID and a **private local receipt**.
+5. Later retrieve the exact `.spub` bytes from Stellar historical transaction data; decrypt using a separately retained or shared key.
 
-**Blockchain publication and retrieval are not yet implemented in this package.**
+The emerging SPUB1 design uses AES-256-GCM for document encryption and standardized **AES-256 Key Wrap (RFC 3394)** to protect the individual document key with a publisher-controlled master key. The encryption scheme is still a **draft** pending interoperability tests.
 
-The current library performs its operations locally and does not transmit notes or encryption keys.
+## Proposed SPUB1 boundaries
 
-## Example
+| Property | Current proposal |
+|---|---|
+| Transport | Soroban transaction argument; one transaction per publication |
+| Maximum package | **Less than 25 KiB**, including envelope; pending transaction-size testing |
+| Stored content | Historical transaction argument, **not** contract persistent/temporary storage |
+| Contract | Public, minimal contract with size/version validation, publisher authorization and metadata event |
+| Package file | `.spub` for both prepared and recovered bytes |
+| Header candidate | 5-byte `SPUB` + version, 40-byte AES-KW key, 12-byte nonce, 16-byte GCM tag, then ciphertext |
+| Identifier | `spub1:<network>:<ledger>:<transaction-hash>` |
+| Key custody | Publisher-controlled; no required hosted key database |
+| Chunking and large files | Outside SPUB1 |
+
+### Publication ID
+
+```text
+spub1:t:5499902:46c026cc0106f8de226df6e76cf6dc995d61a6d05eed346914d63d6bb15c401f
+```
+
+This **real historical Testnet probe locator** points to an earlier **80 KiB experiment**, not a finalized SPUB1 publication. `t` means Testnet; `m` will denote Mainnet. A locator is **not a decryption key**.
+
+## Planned usage (illustrative; commands not implemented yet)
 
 ```python
 import spub
 
-# Encrypt a note locally
-package, key = spub.encrypt(
-    "This is my first encrypted SPUB checkpoint."
-)
+package = spub.prepare("checkpoint.md", save=True)  # optional offline step
+quote = spub.estimate(package, network="testnet")
+quote.show()
+receipt = spub.publish(package, network="testnet")
+receipt.show()
 
-# Recover the original note
-original = spub.decrypt(package, key)
-
-print(original)
+# One-step preparation + publication will also be supported:
+# receipt = spub.publish("checkpoint.md", network="testnet")
 ```
 
-`package` contains the encrypted binary data.
+A publisher does **not** send a Stellar secret key or AES key to the Soroban contract. The client signs locally; the contract receives the **public publisher address** and encrypted package. Different people can publish or retrieve encrypted packages, and recipients do not need a Stellar wallet simply to decrypt them.
 
-`key` is the secret 32-byte AES-256 key required to decrypt it. It is separate from the package.
+**Receipts stay private.** Local receipt fields may include source filename/path, encryption time, submission/confirmation time, actual fees, transaction hash, ledger and publication ID. Original filenames, local paths and AES keys are not put in the public package or contract events. Stellar still exposes the public publisher address, timing, transaction metadata and encrypted bytes.
 
-**Keep the key private and preserve it securely. Losing the key means losing access to the original note.**
+## Working evidence — not yet a production guarantee
 
-## SPUB-E v1 binary format
+Earlier `soroban_probe` experiments published an **80 KiB** payload in a Soroban Testnet transaction and recovered the matching bytes from a Stellar History Archive without using contract persistent storage. This was an architectural proof of concept; it did **not** freeze SPUB1's smaller size cap or its revised encryption envelope.
 
-The initial encrypted package uses this layout:
+The next milestone is **stronger independent archive verification**: transaction success, invocation/contract identity, transaction/results commitments, ledger hash-chain consistency and—where practical—an independently trusted checkpoint hash.
 
-| Component | Size |
-|---|---|
-| Header (`SPUBE` + version byte `0x01`) | 6 bytes |
-| AES-GCM nonce | 12 bytes |
-| Ciphertext | Variable |
-| Authentication tag | 16 bytes |
+## Documents
 
-Total overhead: **34 bytes** beyond the original UTF-8 plaintext.
+- [SPUB1 protocol specification — draft](docs/SPUB1_PROTOCOL_DRAFT.md): byte layout, security boundaries, contract rules, IDs and retrieval.
+- [Python implementation and test plan — draft](docs/PYTHON_IMPLEMENTATION_DRAFT.md): modules, development phases, acceptance tests and a controlled Mainnet test.
 
-The header is authenticated using AES-GCM Additional Authenticated Data (AAD). The encryption key is not stored in the package.
+## What is deliberately deferred
 
-This format is experimental and may change before a stable protocol release.
+Large-file chunking, commercial payments, hosted indexing/search, subscriptions, sponsored transactions, browser applications and on-chain document storage. They are not prerequisites for the first working SPUB1 implementation.
 
-## Development
+## Open development model
 
-Repository can be cloned and the development environment installed using [uv](https://docs.astral.sh/uv/):
+The intent is an open protocol, independently implemented. Anyone should be able to build a compatible publisher or reader, and to deploy a copy of the contract's Wasm under another address. The canonical SPUB1 contract addresses will be documented by network once deployed. This does not give spub.net custody of readers' encryption keys.
 
-```bash
-uv sync
-```
-
-Run the automated tests:
-
-```bash
-uv run python -m pytest -v
-```
-
-Run the example:
-
-```bash
-uv run python examples/basic_encryption.py
-```
-
-## Security considerations
-
-SPUB uses the Python `cryptography` library's AES-256-GCM implementation.
-
-The current encryption implementation should be considered experimental.
-
-
-## Project status
-
-SPUB is in early development.
-
-The intended protocol is open, additional services at SPUB.net in development.
+*Protocol, software and security behavior remain subject to test and revision before release.*
